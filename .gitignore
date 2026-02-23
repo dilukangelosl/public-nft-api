@@ -1,0 +1,44 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+api.log
+indexer.log
+
+# Agent & Markdown tracking
+.agent/
+_agent/
+.agents/
+_agents/
+*.md
+!README.md
+docs/
+
+# OS specific extensions
+.DS_Store
+.idea/
+.vscode/
+tmp/

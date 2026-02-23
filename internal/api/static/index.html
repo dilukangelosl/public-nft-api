@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Public NFT API Indexer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #050505;
+            color: #f1f1f1;
+        }
+
+        code,
+        pre {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            border-radius: 12px;
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #4ade80 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .endpoint-method {
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .method-get {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .method-post {
+            background: rgba(74, 222, 128, 0.2);
+            color: #4ade80;
+        }
+
+        .code-block {
+            background: #0f0f11;
+            padding: 1.5rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            color: #a1a1aa;
+            border: 1px solid #27272a;
+            font-size: 0.9rem;
+        }
+
+        .json-key {
+            color: #818cf8;
+        }
+
+        .json-string {
+            color: #a3e635;
+        }
+
+        .json-number {
+            color: #fbbf24;
+        }
+    </style>
+</head>
+
+<body class="antialiased min-h-screen relative overflow-x-hidden">
+    <!-- Background glow elements -->
+    <div
+        class="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] rounded-full bg-blue-900/20 blur-[120px] pointer-events-none">
+    </div>
+    <div
+        class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] rounded-full bg-emerald-900/20 blur-[120px] pointer-events-none">
+    </div>
+
+    <div class="max-w-5xl mx-auto px-6 py-20 relative z-10">
+        <header class="mb-20 text-center">
+            <h1 class="text-6xl font-extrabold tracking-tight mb-6"><span class="gradient-text">Public NFT
+                    Database</span></h1>
+            <p class="text-xl text-neutral-400 max-w-2xl mx-auto leading-relaxed">
+                Live Ethereum ERC-721 ownership and IPFS metadata indexer. Fast, cached, and totally open for
+                developers.
+            </p>
+            <div class="flex items-center justify-center gap-4 mt-10">
+                <a href="#endpoints"
+                    class="px-8 py-3 bg-white text-black font-semibold rounded-full hover:bg-neutral-200 transition transform hover:scale-105">View
+                    Documentation</a>
+                <div class="glass-panel px-6 py-3 flex items-center gap-3">
+                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span class="text-sm font-medium text-neutral-300">Live on Mainnet</span>
+                </div>
+            </div>
+        </header>
+
+        <section id="features" class="grid md:grid-cols-3 gap-6 mb-24">
+            <div class="glass-panel p-8">
+                <h3 class="text-xl font-bold mb-3 text-white">Live Discovery</h3>
+                <p class="text-neutral-400 leading-relaxed text-sm">Automatically indexes new Ethereum collections
+                    securely via WebSockets on first transfer.</p>
+            </div>
+            <div class="glass-panel p-8">
+                <h3 class="text-xl font-bold mb-3 text-white">Multicall3 Powered</h3>
+                <p class="text-neutral-400 leading-relaxed text-sm">Efficient batched Smart Contract probing and
+                    Snapshot engine built entirely in modern Go concurrency.</p>
+            </div>
+            <div class="glass-panel p-8">
+                <h3 class="text-xl font-bold mb-3 text-white">Ristretto Core</h3>
+                <p class="text-neutral-400 leading-relaxed text-sm">Highly performant LFU memory TTLS caching achieving
+                    sub 10ms queries for common requests.</p>
+            </div>
+        </section>
+
+        <section id="endpoints" class="space-y-12">
+            <h2 class="text-3xl font-bold mb-10 border-b border-neutral-800 pb-4">API Reference</h2>
+
+            <p class="text-neutral-400 -mt-6 mb-10 text-sm">All requests are rate-limited to <strong>60 RPM</strong> per
+                IP. Send `limit` and `page` query parameters for pagination controls.</p>
+
+            <!-- Card -->
+            <div class="glass-panel overflow-hidden">
+                <div
+                    class="p-6 border-b border-neutral-800 bg-neutral-900/50 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                    <div class="flex items-center gap-4">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code class="text-lg font-bold text-white tracking-widest">/v1/collections/:contract</code>
+                    </div>
+                </div>
+                <div class="p-8">
+                    <p class="text-neutral-300 mb-6">Returns summary information for an indexed collection, including
+                        ownership spread and metadata status.</p>
+                    <div class="code-block">
+                        <pre>
+{
+  <span class="json-key">"data"</span>: {
+    <span class="json-key">"address"</span>: <span class="json-string">"0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d"</span>,
+    <span class="json-key">"name"</span>: <span class="json-string">"BoredApeYachtClub"</span>,
+    <span class="json-key">"symbol"</span>: <span class="json-string">"BAYC"</span>,
+    <span class="json-key">"total_supply"</span>: <span class="json-number">10000</span>,
+    <span class="json-key">"burned_count"</span>: <span class="json-number">1</span>,
+    <span class="json-key">"snapshot_done"</span>: <span class="json-number">true</span>
+  }
+}
+</pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card -->
+            <div class="glass-panel overflow-hidden">
+                <div
+                    class="p-6 border-b border-neutral-800 bg-neutral-900/50 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                    <div class="flex items-center gap-4">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code
+                            class="text-lg font-bold text-white tracking-widest">/v1/collections/:contract/tokens</code>
+                    </div>
+                </div>
+                <div class="p-8">
+                    <p class="text-neutral-300 mb-6">Retrieve paginated array of tokens in a collection including
+                        ownership assignments and resolved IPFS traits.</p>
+                </div>
+            </div>
+
+            <!-- Card -->
+            <div class="glass-panel overflow-hidden">
+                <div
+                    class="p-6 border-b border-neutral-800 bg-neutral-900/50 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                    <div class="flex items-center gap-4">
+                        <span class="endpoint-method method-get">GET</span>
+                        <code class="text-lg font-bold text-white tracking-widest">/v1/owners/:address</code>
+                    </div>
+                </div>
+                <div class="p-8">
+                    <p class="text-neutral-300 mb-6">Cross-collection reverse ownership lookup mapping all NFTs
+                        connected globally to a wallet address.</p>
+                </div>
+            </div>
+
+            <!-- Card -->
+            <div class="glass-panel overflow-hidden">
+                <div
+                    class="p-6 border-b border-neutral-800 bg-neutral-900/50 flex flex-col md:flex-row md:items-center gap-4 justify-between">
+                    <div class="flex items-center gap-4">
+                        <span class="endpoint-method method-post">POST</span>
+                        <code class="text-lg font-bold text-white tracking-widest">/v1/collections</code>
+                    </div>
+                </div>
+                <div class="p-8">
+                    <p class="text-neutral-300 mb-6">Manually enqueue an ERC-721 contract for priority background
+                        indexing overriding WebSocket discovery mechanisms.</p>
+                    <div class="code-block">
+                        <pre>
+<span class="text-neutral-500">// Request Payload</span>
+{
+  <span class="json-key">"address"</span>: <span class="json-string">"0x..."</span>
+}
+</pre>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <footer class="mt-32 pt-10 border-t border-neutral-800 text-center">
+            <p class="text-neutral-500 text-sm flex justify-between items-center">
+                <span>Created with high-throughput Go</span>
+                <span class="font-mono bg-neutral-900 px-3 py-1 rounded text-neutral-400">v1.2</span>
+            </p>
+        </footer>
+    </div>
+</body>
+
+</html>

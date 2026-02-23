@@ -1,0 +1,9 @@
+.git/
+.vscode/
+tmp/
+vendor/
+.env
+api.log
+indexer.log
+*.env
+*.go.test

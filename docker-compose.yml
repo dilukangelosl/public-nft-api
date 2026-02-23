@@ -1,0 +1,20 @@
+services:
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/app/indexer"]
+    restart: always
+    env_file:
+      - .env
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["/app/api"]
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    restart: always
+    env_file:
+      - .env
