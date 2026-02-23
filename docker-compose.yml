@@ -13,8 +13,6 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["/app/api"]
-    ports:
-      - "${PORT:-3000}:${PORT:-3000}"
     restart: always
     env_file:
       - .env
