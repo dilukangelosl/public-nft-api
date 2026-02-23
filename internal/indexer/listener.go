@@ -46,34 +46,54 @@ func (l *Listener) Start(ctx context.Context) {
 }
 
 func (l *Listener) runManualDiscoveryListener(ctx context.Context) {
-	conn, err := l.dbStore.Pool.Acquire(ctx)
-	if err != nil {
-		l.logger.Error("Failed to acquire connection for Postgres LISTEN", zap.Error(err))
-		return
-	}
-	defer conn.Release()
-
-	_, err = conn.Exec(ctx, "LISTEN manual_discovery")
-	if err != nil {
-		l.logger.Error("Failed to LISTEN for manual_discovery", zap.Error(err))
-		return
-	}
-
 	for {
-		notification, err := conn.Conn().WaitForNotification(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			l.logger.Error("Error waiting for notification", zap.Error(err))
-			continue
+		if ctx.Err() != nil {
+			return
 		}
 
-		contract := notification.Payload
-		if _, known := l.knownContracts.Load(contract); !known {
-			if _, pending := l.pendingContracts.LoadOrStore(contract, true); !pending {
-				l.discoveryChan <- contract
-				l.logger.Info("Received Postgres NOTIFY for manual indexing", zap.String("contract", contract))
+		conn, err := l.dbStore.Pool.Acquire(ctx)
+		if err != nil {
+			l.logger.Error("Failed to acquire LISTEN connection, retrying in 5s", zap.Error(err))
+			select {
+			case <-time.After(5 * time.Second):
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		_, err = conn.Exec(ctx, "LISTEN manual_discovery")
+		if err != nil {
+			conn.Release()
+			l.logger.Error("Failed to LISTEN for manual_discovery, retrying in 5s", zap.Error(err))
+			select {
+			case <-time.After(5 * time.Second):
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		l.logger.Info("Postgres LISTEN on manual_discovery channel active")
+
+		for {
+			notification, err := conn.Conn().WaitForNotification(ctx)
+			if err != nil {
+				conn.Release()
+				if ctx.Err() != nil {
+					return
+				}
+				l.logger.Warn("LISTEN connection dropped, reconnecting in 2s", zap.Error(err))
+				time.Sleep(2 * time.Second)
+				break // re-enter outer loop to re-acquire connection
+			}
+
+			contract := notification.Payload
+			if _, known := l.knownContracts.Load(contract); !known {
+				if _, pending := l.pendingContracts.LoadOrStore(contract, true); !pending {
+					l.discoveryChan <- contract
+					l.logger.Info("Received Postgres NOTIFY for manual indexing", zap.String("contract", contract))
+				}
 			}
 		}
 	}
