@@ -56,3 +56,12 @@ func (s *Store) ResetCollectionMetadataStatus(ctx context.Context, address strin
 	}
 	return nil
 }
+
+// RecordMetadataError appends a fetch failure to the metadata_errors log.
+// The DB trigger automatically prunes to the last 20 entries per contract.
+func (s *Store) RecordMetadataError(ctx context.Context, contract, tokenID, errMsg string) {
+	_, _ = s.Pool.Exec(ctx,
+		`INSERT INTO metadata_errors (contract, token_id, error) VALUES ($1, $2, $3)`,
+		contract, tokenID, errMsg,
+	)
+}

@@ -3,25 +3,58 @@ package api
 import (
 	"math"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
 
 type CollectionStats struct {
-	Address          string  `json:"address"`
-	Name             string  `json:"name"`
-	Symbol           string  `json:"symbol"`
-	TotalSupply      int64   `json:"total_supply"`
-	SnapshotDone     bool    `json:"snapshot_done"`
-	SnapshotBlock    int64   `json:"snapshot_block"`
-	TokensIndexed    int64   `json:"tokens_indexed"`
-	BurnedCount      int64   `json:"burned_count"`
-	UniqueOwners     int64   `json:"unique_owners"`
-	MetadataFetched  int64   `json:"metadata_fetched"`
-	MetadataPending  int64   `json:"metadata_pending"`
-	MetadataProgress float64 `json:"metadata_progress_pct"`
+	Address          string          `json:"address"`
+	Name             string          `json:"name"`
+	Symbol           string          `json:"symbol"`
+	TotalSupply      int64           `json:"total_supply"`
+	SnapshotDone     bool            `json:"snapshot_done"`
+	SnapshotBlock    int64           `json:"snapshot_block"`
+	TokensIndexed    int64           `json:"tokens_indexed"`
+	BurnedCount      int64           `json:"burned_count"`
+	UniqueOwners     int64           `json:"unique_owners"`
+	MetadataFetched  int64           `json:"metadata_fetched"`
+	MetadataPending  int64           `json:"metadata_pending"`
+	MetadataProgress float64         `json:"metadata_progress_pct"`
+	RecentErrors     []MetadataError `json:"recent_errors,omitempty"`
 }
+
+type MetadataError struct {
+	TokenID    string `json:"token_id"`
+	Error      string `json:"error"`
+	OccurredAt string `json:"occurred_at"`
+}
+
+func (a *API) loadRecentErrors(r *http.Request, contract string) []MetadataError {
+	rows, err := a.Store.Pool.Query(r.Context(), `
+		SELECT token_id, error, occurred_at
+		FROM metadata_errors
+		WHERE contract = $1
+		ORDER BY occurred_at DESC
+		LIMIT 20
+	`, contract)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var errs []MetadataError
+	for rows.Next() {
+		var e MetadataError
+		var t time.Time
+		if err := rows.Scan(&e.TokenID, &e.Error, &t); err == nil {
+			e.OccurredAt = t.UTC().Format(time.RFC3339)
+			errs = append(errs, e)
+		}
+	}
+	return errs
+}
+
 
 // GET /v1/collections/:contract/stats
 // Returns snapshot status, token count, unique owners, burned count, and metadata progress.
@@ -71,6 +104,7 @@ func (a *API) HandleCollectionStats(w http.ResponseWriter, r *http.Request) {
 	if s.TokensIndexed > 0 {
 		s.MetadataProgress = math.Round(float64(metaFetched)/float64(s.TokensIndexed)*10000) / 100
 	}
+	s.RecentErrors = a.loadRecentErrors(r, contract)
 
 	RespondJSON(w, http.StatusOK, APIResponse{Data: s})
 }

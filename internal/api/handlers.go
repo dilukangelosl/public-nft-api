@@ -70,42 +70,82 @@ func (a *API) HandleGetCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /v1/collections/:contract/reindex-metadata
+// Catch-up: re-queues only tokens with metadata_fetched=false (pending tokens).
 func (a *API) HandleReindexMetadata(w http.ResponseWriter, r *http.Request) {
 	contract := chi.URLParam(r, "contract")
+	coll, err := a.Store.GetCollection(r.Context(), contract)
+	if err != nil {
+		RespondError(w, http.StatusNotFound, "not_found", "Collection not found")
+		return
+	}
+	if coll.Reindexing {
+		RespondError(w, http.StatusConflict, "reindexing", "Metadata reindex already in progress")
+		return
+	}
+	go a.triggerFullReindex(context.Background(), contract, coll.TotalSupply, false)
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte(`{"message": "Pending metadata tokens re-queued."}`))
+}
+
+// POST /v1/collections/:contract/resync-metadata
+// Force-refresh ALL tokens including already-fetched (for dynamic NFTs).
+// ?delete_stale=true also wipes existing metadata rows before re-fetching.
+func (a *API) HandleResyncMetadata(w http.ResponseWriter, r *http.Request) {
+	contract := chi.URLParam(r, "contract")
+	deleteStale := r.URL.Query().Get("delete_stale") == "true"
 
 	coll, err := a.Store.GetCollection(r.Context(), contract)
 	if err != nil {
 		RespondError(w, http.StatusNotFound, "not_found", "Collection not found")
 		return
 	}
-
 	if coll.Reindexing {
-		RespondError(w, http.StatusConflict, "reindexing", "Metadata reindex already in progress for this collection")
+		RespondError(w, http.StatusConflict, "reindexing", "Metadata resync already in progress")
 		return
 	}
 
-	// Initiate background reindex routine
-	go a.triggerFullReindex(context.Background(), contract, coll.TotalSupply)
+	if deleteStale {
+		if _, err := a.Store.Pool.Exec(r.Context(), `DELETE FROM metadata WHERE contract = $1`, contract); err != nil {
+			a.Logger.Error("Failed to delete stale metadata", zap.String("contract", contract), zap.Error(err))
+			RespondError(w, http.StatusInternalServerError, "db_error", "Failed to clear stale metadata")
+			return
+		}
+	}
 
+	go a.triggerFullReindex(context.Background(), contract, coll.TotalSupply, true)
+	msg := `{"message": "Full metadata resync queued for all tokens."}`
+	if deleteStale {
+		msg = `{"message": "Stale metadata cleared. Full resync queued for all tokens."}`
+	}
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"message": "Full collection metadata re-queued for fetch."}`))
+	w.Write([]byte(msg))
 }
 
-func (a *API) triggerFullReindex(ctx context.Context, contract string, totalSupply int64) {
-	// 1. Mark reindexing true globally
-	_ = a.Store.SetCollectionReindexing(ctx, contract, true)
-	defer a.Store.SetCollectionReindexing(ctx, contract, false) // un-flag when done generating jobs
 
-	// 2. Clear fetched status for the whole contract
-	if err := a.Store.ResetCollectionMetadataStatus(ctx, contract); err != nil {
-		a.Logger.Error("Failed to reset metadata fetch status", zap.Error(err))
-		return
+// triggerFullReindex queues all tokens for metadata fetch.
+// force=true: resets metadata_fetched=false for ALL tokens (including already-fetched).
+// force=false: only re-queues tokens already marked as metadata_fetched=false (catch-up).
+func (a *API) triggerFullReindex(ctx context.Context, contract string, totalSupply int64, force bool) {
+	_ = a.Store.SetCollectionReindexing(ctx, contract, true)
+	defer a.Store.SetCollectionReindexing(ctx, contract, false)
+
+	if force {
+		// Reset ALL tokens so dispatcher will re-fetch every one
+		if _, err := a.Store.Pool.Exec(ctx, `UPDATE tokens SET metadata_fetched = false WHERE contract = $1`, contract); err != nil {
+			a.Logger.Error("Failed to reset all metadata flags", zap.Error(err))
+			return
+		}
+	} else {
+		// Legacy: only reset the ones stuck as not-fetched
+		if err := a.Store.ResetCollectionMetadataStatus(ctx, contract); err != nil {
+			a.Logger.Error("Failed to reset pending metadata flags", zap.Error(err))
+			return
+		}
 	}
 
-	// 3. Flood the metadata queue with jobs
+	// Ensure the metadata queue channel exists
 	a.MetadataMutex.Lock()
 	if _, ok := a.MetadataQueue[contract]; !ok {
-		// re-init channel bound if it naturally decayed
 		bound := totalSupply
 		if bound > 50000 {
 			bound = 50000
@@ -114,10 +154,12 @@ func (a *API) triggerFullReindex(ctx context.Context, contract string, totalSupp
 	}
 	a.MetadataMutex.Unlock()
 
-	// 4. Send all IDs from DB into Queue.
-	// Production NOTE: For 10k items, simple loop queries block. For true scale, a cursor streaming rows down is needed.
-	// For this spec, sending 1 by 1 from standard querying works.
-	rows, err := a.Store.Pool.Query(ctx, "SELECT token_id FROM tokens WHERE contract = $1", contract)
+	// Stream all token IDs into the queue
+	query := `SELECT token_id FROM tokens WHERE contract = $1`
+	if !force {
+		query = `SELECT token_id FROM tokens WHERE contract = $1 AND metadata_fetched = false`
+	}
+	rows, err := a.Store.Pool.Query(ctx, query, contract)
 	if err != nil {
 		a.Logger.Error("Failed to fetch token list for reindex", zap.Error(err))
 		return
@@ -128,41 +170,62 @@ func (a *API) triggerFullReindex(ctx context.Context, contract string, totalSupp
 	for rows.Next() {
 		var tokenID string
 		if err := rows.Scan(&tokenID); err == nil {
-			ch <- tokenID
+			select {
+			case ch <- tokenID:
+			default:
+				// Channel full — dispatcher will drain before we can push more
+				a.Logger.Warn("Metadata queue full during reindex", zap.String("contract", contract), zap.String("token", tokenID))
+			}
 		}
 	}
 }
 
 // POST /v1/collections/:contract/tokens/:tokenId/reindex-metadata
+// Catches up a single token's metadata if it was never fetched.
 func (a *API) HandleReindexSingleToken(w http.ResponseWriter, r *http.Request) {
+	a.enqueueSingleTokenMetadata(w, r, false)
+}
+
+// POST /v1/collections/:contract/tokens/:tokenId/resync-metadata
+// Force-refreshes a single token's metadata even if already fetched (for dynamic NFTs).
+func (a *API) HandleResyncSingleToken(w http.ResponseWriter, r *http.Request) {
+	a.enqueueSingleTokenMetadata(w, r, true)
+}
+
+func (a *API) enqueueSingleTokenMetadata(w http.ResponseWriter, r *http.Request, force bool) {
 	contract := chi.URLParam(r, "contract")
 	tokenID := chi.URLParam(r, "tokenId")
 
-	// Set fetch state to false internally directly against token row
-	_, err := a.Store.Pool.Exec(r.Context(), "UPDATE tokens SET metadata_fetched = false WHERE contract = $1 AND token_id = $2", contract, tokenID)
-	if err != nil {
+	if force {
+		// Delete existing metadata row so it's re-fetched fresh
+		_, _ = a.Store.Pool.Exec(r.Context(), `DELETE FROM metadata WHERE contract = $1 AND token_id = $2`, contract, tokenID)
+	}
+
+	// Reset token's metadata_fetched flag
+	res, err := a.Store.Pool.Exec(r.Context(), `UPDATE tokens SET metadata_fetched = false WHERE contract = $1 AND token_id = $2`, contract, tokenID)
+	if err != nil || res.RowsAffected() == 0 {
 		RespondError(w, http.StatusNotFound, "not_found", "Token not found")
 		return
 	}
 
-	// Inject back into active pool
+	// Push into the metadata queue
 	a.MetadataMutex.RLock()
-	if ch, ok := a.MetadataQueue[contract]; ok {
-		select {
-		case ch <- tokenID:
-		default:
-		}
-	} else {
-		// if channel decayed, recreate manually to wake up dispatcher
-		a.MetadataMutex.RUnlock()
-		a.MetadataMutex.Lock()
-		a.MetadataQueue[contract] = make(chan string, 100)
-		a.MetadataQueue[contract] <- tokenID
-		a.MetadataMutex.Unlock()
-		a.MetadataMutex.RLock()
-	}
+	ch, ok := a.MetadataQueue[contract]
 	a.MetadataMutex.RUnlock()
 
+	if !ok {
+		a.MetadataMutex.Lock()
+		a.MetadataQueue[contract] = make(chan string, 100)
+		ch = a.MetadataQueue[contract]
+		a.MetadataMutex.Unlock()
+	}
+
+	select {
+	case ch <- tokenID:
+	default:
+	}
+
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"message": "Single token queued for metadata fetch."}`))
+	w.Write([]byte(`{"message": "Token queued for metadata fetch."}`))
 }
+

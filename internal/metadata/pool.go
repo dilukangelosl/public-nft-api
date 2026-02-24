@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -40,10 +41,13 @@ func (d *Dispatcher) processJobWithRetries(ctx context.Context, contract string,
 			gatewaysTriedInCurrentCycle = 0
 			
 			if cyclesCompleted >= maxCycles {
+				errMsg := fmt.Sprintf("max retries exceeded across %d gateway cycles", maxCycles)
 				d.logger.Error("Max metadata gateway rotation cycles reached, giving up on token",
 					zap.String("contract", contract),
 					zap.String("token", tokenID),
+					zap.Error(err),
 				)
+				d.db.RecordMetadataError(ctx, contract, tokenID, errMsg)
 				return
 			}
 			

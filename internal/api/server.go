@@ -60,7 +60,9 @@ func NewServer(
 		// Command/Enqueuing POST endpoints
 		r.Post("/collections", api.HandleQueueCollection)
 		r.Post("/collections/{contract}/reindex-metadata", api.HandleReindexMetadata)
+		r.Post("/collections/{contract}/resync-metadata", api.HandleResyncMetadata)
 		r.Post("/collections/{contract}/tokens/{tokenId}/reindex-metadata", api.HandleReindexSingleToken)
+		r.Post("/collections/{contract}/tokens/{tokenId}/resync-metadata", api.HandleResyncSingleToken)
 
 		// Stats routes (uncached – always fresh)
 		r.Get("/stats", api.HandleGlobalStats)
