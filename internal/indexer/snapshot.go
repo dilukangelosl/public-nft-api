@@ -11,12 +11,16 @@ import (
 	"github.com/dilukangelosl/public-nft-api/internal/store"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/time/rate"
 )
 
 const (
-	BatchSize           = 500
-	MaxConcurrentBatches = 10
+	BatchSize            = 500
+	MaxConcurrentBatches = 3   // max parallel Multicall3 batches per snapshot
 )
+
+// globalRPCLimiter caps total RPC calls across all concurrent snapshots
+var globalRPCLimiter = rate.NewLimiter(rate.Limit(5), 5) // 5 RPC calls/sec burst 5
 
 func ProcessSnapshot(
 	ctx context.Context,
@@ -28,6 +32,7 @@ func ProcessSnapshot(
 	metadataQueue map[string]chan string,
 	metadataMutex *sync.RWMutex,
 ) error {
+	hasMetadataQueue := metadataQueue != nil && metadataMutex != nil
 	logger.Info("Starting snapshot for collection", zap.String("contract", contract))
 
 	// 1. Fetch Collection Metadata: name, symbol, totalSupply
@@ -74,16 +79,17 @@ func ProcessSnapshot(
 	}
 
 	// Prepare metadata queue channel for this contract
-	channelSize := totalSupply
-	if channelSize > 50000 {
-		channelSize = 50000 // cap buffered channel bounds if extreme
+	if hasMetadataQueue {
+		channelSize := totalSupply
+		if channelSize > 50000 {
+			channelSize = 50000
+		}
+		metadataMutex.Lock()
+		if _, exists := metadataQueue[contract]; !exists {
+			metadataQueue[contract] = make(chan string, channelSize)
+		}
+		metadataMutex.Unlock()
 	}
-
-	metadataMutex.Lock()
-	if _, exists := metadataQueue[contract]; !exists {
-		metadataQueue[contract] = make(chan string, channelSize)
-	}
-	metadataMutex.Unlock()
 
 	// 3. Multicall3 batch fetching of Owners
 	// Max cap total supply snapshot processing locally (for example some arbitrary logic collections can return MAX_INT)
@@ -116,6 +122,14 @@ func ProcessSnapshot(
 
 	for _, chunk := range chunks {
 		wg.Add(1)
+
+		// Wait for global rate limiter before acquiring semaphore slot
+		if waitErr := globalRPCLimiter.Wait(ctx); waitErr != nil {
+			errChan <- waitErr
+			wg.Done()
+			continue
+		}
+
 		err := sem.Acquire(ctx, 1)
 		if err != nil {
 			errChan <- err
@@ -133,7 +147,6 @@ func ProcessSnapshot(
 				batchCalls = append(batchCalls, call)
 			}
 
-			// Perform Batch Call
 			batchRes, err := chain.Aggregate3(ctx, ethClient, batchCalls)
 			if err != nil {
 				logger.Error("Chunk ownerOf multicall failed, some tokens skipped", zap.Error(err))
@@ -153,12 +166,12 @@ func ProcessSnapshot(
 							UpdatedAt:       time.Now().UTC(),
 						}
 
-						// Push to metadata queue channel
-						// Non-blocking in worst case, assuming well-sized buffer
-						select {
-						case metadataQueue[contract] <- tokenIDStr:
-						default:
-							logger.Warn("Metadata queue full, dropping immediate enqueue (reindex required)", zap.String("tokenId", tokenIDStr))
+						if hasMetadataQueue {
+							select {
+							case metadataQueue[contract] <- tokenIDStr:
+							default:
+								logger.Warn("Metadata queue full, dropping immediate enqueue", zap.String("tokenId", tokenIDStr))
+							}
 						}
 					}
 				}
@@ -179,8 +192,8 @@ func ProcessSnapshot(
 	}
 
 	if len(allTokens) > 0 {
-		if err := dbStore.BulkInsertTokens(ctx, allTokens); err != nil {
-			return fmt.Errorf("bulk DB insert failed: %w", err)
+		if err := dbStore.BulkUpsertTokens(ctx, allTokens); err != nil {
+			return fmt.Errorf("bulk DB upsert failed: %w", err)
 		}
 	}
 

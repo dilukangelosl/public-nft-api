@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/dilukangelosl/public-nft-api/config"
 	"github.com/dilukangelosl/public-nft-api/internal/chain"
@@ -59,6 +60,24 @@ func main() {
 	// Startup Daemons
 	go listener.Start(ctx)
 	go dispatcher.Start(ctx)
+
+	// Recovery: on startup, re-snapshot every known collection to catch ownership
+	// drift that occurred while the indexer was offline. ForceResnap bypasses the
+	// knownContracts guard and uses BulkUpsertTokens for idempotent writes.
+	go func() {
+		time.Sleep(3 * time.Second) // wait for WS subscription and LISTEN to be active
+		all, err := db.GetAllCollections(ctx)
+		if err != nil {
+			logger.Error("Failed to query collections for startup recovery", zap.Error(err))
+			return
+		}
+		if len(all) > 0 {
+			logger.Info("Startup recovery: re-snapshotting all collections", zap.Int("count", len(all)))
+			for _, c := range all {
+				listener.ForceResnap(c.Address)
+			}
+		}
+	}()
 
 	logger.Info("Indexer & Metadata Background Daemons Running Successfully")
 

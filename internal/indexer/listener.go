@@ -13,6 +13,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type pendingTransfer struct {
+	to      string
+	tokenID string
+}
+
 type Listener struct {
 	ethClient     *chain.Client
 	dbStore       *store.Store
@@ -25,17 +30,23 @@ type Listener struct {
 	pendingContracts sync.Map
 	blacklisted      sync.Map
 
+	// Buffers Transfer events that arrive while a snapshot is in-flight.
+	// Keyed by contract address, drained after snapshot completes.
+	pendingTransfers   map[string][]pendingTransfer
+	pendingTransfersMu sync.Mutex
+
 	discoveryChan chan string
 }
 
 func NewListener(eth *chain.Client, db *store.Store, log *zap.Logger, mdQ map[string]chan string, mdMutex *sync.RWMutex) *Listener {
 	return &Listener{
-		ethClient:     eth,
-		dbStore:       db,
-		logger:        log,
-		metadataQueue: mdQ,
-		metadataMutex: mdMutex,
-		discoveryChan: make(chan string, 1000), // Buffered Discovery Channel
+		ethClient:        eth,
+		dbStore:          db,
+		logger:           log,
+		metadataQueue:    mdQ,
+		metadataMutex:    mdMutex,
+		pendingTransfers: make(map[string][]pendingTransfer),
+		discoveryChan:    make(chan string, 1000),
 	}
 }
 
@@ -149,23 +160,16 @@ func (l *Listener) runWebSocketLoop(ctx context.Context) {
 }
 
 func (l *Listener) handleTransferLog(ctx context.Context, contract, from, to, tokenID string, blockNum uint64) {
-	// 1. Is it a known blacklisted contract? Discard instantly.
+	// 1. Blacklisted — discard instantly.
 	if _, bad := l.blacklisted.Load(contract); bad {
 		return
 	}
 
-	// 2. Is it a fully known contract we track?
+	// 2. Fully known — apply immediately.
 	if _, known := l.knownContracts.Load(contract); known {
-		// Verify if the block is before its snapshot started
-		// Note: to be fully safe with block overlaps, production systems usually check the snapshot_block threshold
-		// We process it directly.
-		err := l.dbStore.UpdateOwnership(ctx, contract, to, tokenID)
-		if err != nil {
-			l.logger.Error("Failed to update ownership for known transfer", zap.String("contract", contract), zap.String("token", tokenID), zap.Error(err))
+		if err := l.dbStore.UpdateOwnership(ctx, contract, to, tokenID); err != nil {
+			l.logger.Error("Failed to update ownership", zap.String("contract", contract), zap.String("token", tokenID), zap.Error(err))
 		}
-		
-		// If the token ID isn't in DB, the 'update ownership' might result in no rows affected, or create it empty.
-		// Re-enqueuing metadata fetch for new mints dynamically here might be necessary
 		l.metadataMutex.RLock()
 		if ch, ok := l.metadataQueue[contract]; ok {
 			select {
@@ -177,14 +181,22 @@ func (l *Listener) handleTransferLog(ctx context.Context, contract, from, to, to
 		return
 	}
 
-	// 3. New contract. Check if it's already pending snapshot discovery
-	if _, pending := l.pendingContracts.LoadOrStore(contract, true); !pending {
-		l.logger.Info("New unindexed contract transfer detected, pushing to Discovery Channel", zap.String("contract", contract))
+	// 3. Pending snapshot — buffer the transfer, apply after snapshot finishes.
+	if _, pending := l.pendingContracts.Load(contract); pending {
+		l.pendingTransfersMu.Lock()
+		l.pendingTransfers[contract] = append(l.pendingTransfers[contract], pendingTransfer{to: to, tokenID: tokenID})
+		l.pendingTransfersMu.Unlock()
+		return
+	}
+
+	// 4. New contract — push to discovery.
+	if _, alreadyPending := l.pendingContracts.LoadOrStore(contract, true); !alreadyPending {
+		l.logger.Info("New unindexed contract detected, pushing to discovery", zap.String("contract", contract))
 		select {
 		case l.discoveryChan <- contract:
 		default:
-			l.logger.Warn("Discovery channel full, dropped prospective contract", zap.String("contract", contract))
-			l.pendingContracts.Delete(contract) // allow it to be picked up again later
+			l.logger.Warn("Discovery channel full, dropping contract", zap.String("contract", contract))
+			l.pendingContracts.Delete(contract)
 		}
 	}
 }
@@ -223,9 +235,24 @@ func (l *Listener) runDiscoveryLoop(ctx context.Context) {
 				continue
 			}
 
-			// Successfully Snapshotted. Promote from Pending -> Known
+			// Promote to known BEFORE draining buffer so new transfers go direct path.
 			l.knownContracts.Store(contract, true)
 			l.pendingContracts.Delete(contract)
+
+			// Drain buffered transfers that arrived during the snapshot window.
+			l.pendingTransfersMu.Lock()
+			buffered := l.pendingTransfers[contract]
+			delete(l.pendingTransfers, contract)
+			l.pendingTransfersMu.Unlock()
+
+			if len(buffered) > 0 {
+				l.logger.Info("Applying buffered transfers post-snapshot", zap.String("contract", contract), zap.Int("count", len(buffered)))
+				for _, t := range buffered {
+					if err := l.dbStore.UpdateOwnership(ctx, contract, t.to, t.tokenID); err != nil {
+						l.logger.Error("Failed to apply buffered transfer", zap.String("contract", contract), zap.String("token", t.tokenID), zap.Error(err))
+					}
+				}
+			}
 
 		case <-ctx.Done():
 			return
@@ -233,10 +260,23 @@ func (l *Listener) runDiscoveryLoop(ctx context.Context) {
 	}
 }
 
-// ManuallyEnqueue is exposed for the API server POST /v1/collections Endpoint
+// ManuallyEnqueue pushes a contract into the discovery queue.
+// forceResnap=true bypasses the knownContracts guard (used for startup recovery re-snapshots).
 func (l *Listener) ManuallyEnqueue(contract string) bool {
-	if _, known := l.knownContracts.Load(contract); known {
-		return false // Already indexed
+	return l.enqueue(contract, false)
+}
+
+func (l *Listener) ForceResnap(contract string) bool {
+	// Remove from known so the discovery loop re-runs a full snapshot.
+	l.knownContracts.Delete(contract)
+	return l.enqueue(contract, true)
+}
+
+func (l *Listener) enqueue(contract string, force bool) bool {
+	if !force {
+		if _, known := l.knownContracts.Load(contract); known {
+			return false
+		}
 	}
 	if _, pending := l.pendingContracts.LoadOrStore(contract, true); !pending {
 		select {
@@ -247,5 +287,5 @@ func (l *Listener) ManuallyEnqueue(contract string) bool {
 			return false
 		}
 	}
-	return true // Already pending
+	return true
 }

@@ -108,3 +108,47 @@ func (s *Store) UpdateOwnership(ctx context.Context, contract, to, tokenId strin
 	}
 	return nil
 }
+
+// BulkUpsertTokens is used for re-snapshots. It atomically deletes all existing
+// token rows for the contract then re-inserts fresh ownership data.
+func (s *Store) BulkUpsertTokens(ctx context.Context, tokens []Token) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	contract := tokens[0].Contract
+
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error beginning tx for bulk upsert: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Atomically remove stale ownership data before re-inserting
+	if _, err := tx.Exec(ctx, `DELETE FROM owner_tokens WHERE contract = $1`, contract); err != nil {
+		return fmt.Errorf("error deleting old owner_tokens for upsert: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tokens WHERE contract = $1`, contract); err != nil {
+		return fmt.Errorf("error deleting old tokens for upsert: %w", err)
+	}
+
+	var tokenRows [][]interface{}
+	var ownerRows [][]interface{}
+	for _, t := range tokens {
+		tokenRows = append(tokenRows, []interface{}{t.Contract, t.TokenID, t.Owner, t.MetadataFetched, t.UpdatedAt})
+		ownerRows = append(ownerRows, []interface{}{t.Owner, t.Contract, t.TokenID})
+	}
+
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"tokens"},
+		[]string{"contract", "token_id", "owner", "metadata_fetched", "updated_at"},
+		pgx.CopyFromRows(tokenRows)); err != nil {
+		return fmt.Errorf("error bulk copying tokens for upsert: %w", err)
+	}
+
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"owner_tokens"},
+		[]string{"owner", "contract", "token_id"},
+		pgx.CopyFromRows(ownerRows)); err != nil {
+		return fmt.Errorf("error bulk copying owner_tokens for upsert: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}

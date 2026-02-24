@@ -71,3 +71,41 @@ func (s *Store) SetCollectionReindexing(ctx context.Context, address string, sta
 	}
 	return nil
 }
+
+// GetIncompleteCollections returns all collections where snapshot_done = false.
+// Used at startup to re-queue any snapshot that was interrupted by a crash or restart.
+func (s *Store) GetIncompleteCollections(ctx context.Context) ([]Collection, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT address FROM collections WHERE snapshot_done = false`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying incomplete collections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Collection
+	for rows.Next() {
+		var c Collection
+		if err := rows.Scan(&c.Address); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// GetAllCollections returns addresses of all indexed collections.
+// Used on startup to re-snapshot every known collection and catch any missed transfers.
+func (s *Store) GetAllCollections(ctx context.Context) ([]Collection, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT address FROM collections ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying all collections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Collection
+	for rows.Next() {
+		var c Collection
+		if err := rows.Scan(&c.Address); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
