@@ -13,11 +13,13 @@ type Config struct {
 	AlchemyHTTP  string
 	IPFSGateways []string
 	Port         string
+	ChainName    string
 }
 
 func Load() (*Config, error) {
 	viper.AutomaticEnv()
 	viper.SetDefault("PORT", "8080")
+	viper.SetDefault("CHAIN_NAME", "ApeChain")
 	viper.SetDefault("IPFS_GATEWAYS", "https://cloudflare-ipfs.com/ipfs/,https://gateway.pinata.cloud/ipfs/,https://nftstorage.link/ipfs/,https://w3s.link/ipfs/,https://4everland.io/ipfs/")
 
 	viper.SetConfigFile(".env")
@@ -54,5 +56,6 @@ func Load() (*Config, error) {
 		AlchemyHTTP:  httpURL,
 		IPFSGateways: validGateways,
 		Port:         viper.GetString("PORT"),
+		ChainName:    viper.GetString("CHAIN_NAME"),
 	}, nil
 }

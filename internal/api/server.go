@@ -2,6 +2,7 @@ package api
 
 import (
 	_ "embed"
+	"bytes"
 	"net/http"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ func NewServer(
 	logger *zap.Logger,
 	mdMutex *sync.RWMutex,
 	mdQueue map[string]chan string,
+	chainName string,
 ) http.Handler {
 
 	api := &API{
@@ -30,6 +32,7 @@ func NewServer(
 		Logger:        logger,
 		MetadataMutex: mdMutex,
 		MetadataQueue: mdQueue,
+		ChainName:     chainName,
 	}
 
 	r := chi.NewRouter()
@@ -73,7 +76,7 @@ func NewServer(
 	})
 
 	// Setup basic Developer API landing page mapping
-	r.Get("/", LandingPageHandler)
+	r.Get("/", LandingPageHandler(api.ChainName))
 
 	return r
 }
@@ -81,9 +84,12 @@ func NewServer(
 //go:embed static/index.html
 var indexHTML []byte
 
-func LandingPageHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
+func LandingPageHandler(chainName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		page := bytes.ReplaceAll(indexHTML, []byte("{{CHAIN_NAME}}"), []byte(chainName))
+		w.Write(page)
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

@@ -19,6 +19,7 @@ type API struct {
 	Logger        *zap.Logger
 	MetadataMutex *sync.RWMutex
 	MetadataQueue map[string]chan string
+	ChainName     string
 }
 
 // POST /v1/collections

@@ -76,53 +76,71 @@ func (a *API) HandleGetCollectionOwners(w http.ResponseWriter, r *http.Request) 
 func (a *API) HandleGetOwnerTokens(w http.ResponseWriter, r *http.Request) {
 	address := chi.URLParam(r, "address")
 	addressStr := strings.ToLower(address)
-	
 	page, limit := GetPagination(r)
 	offset := (page - 1) * limit
+	withMetadata := r.URL.Query().Get("metadata") == "true"
 
-	// Count total
 	var total int
-	countQuery := "SELECT count(*) FROM owner_tokens WHERE owner = $1"
-	err := a.Store.Pool.QueryRow(r.Context(), countQuery, addressStr).Scan(&total)
-	if err != nil {
+	if err := a.Store.Pool.QueryRow(r.Context(), "SELECT count(*) FROM owner_tokens WHERE owner = $1", addressStr).Scan(&total); err != nil {
 		RespondError(w, http.StatusInternalServerError, "db_error", "Failed to count owner tokens")
 		return
 	}
 
-	// Fetch join
-	query := `
-		SELECT ot.contract, ot.token_id, c.name, c.symbol, m.name, m.image
-		FROM owner_tokens ot
-		JOIN collections c ON c.address = ot.contract
-		LEFT JOIN metadata m ON m.contract = ot.contract AND m.token_id = ot.token_id
-		WHERE ot.owner = $1
-		ORDER BY ot.contract ASC, CAST(ot.token_id AS NUMERIC) ASC
-		LIMIT $2 OFFSET $3
-	`
-
-	rows, err := a.Store.Pool.Query(r.Context(), query, addressStr, limit, offset)
-	if err != nil {
-		RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query owner tokens")
-		return
-	}
-	defer rows.Close()
-
 	type OwnerTokenItem struct {
-		Contract        string  `json:"contract"`
-		CollectionName  *string `json:"collection_name,omitempty"`
-		CollectionSym   *string `json:"collection_symbol,omitempty"`
-		TokenID         string  `json:"token_id"`
-		MetadataName    *string `json:"name,omitempty"`
-		MetadataImage   *string `json:"image,omitempty"`
+		Contract       string  `json:"contract"`
+		CollectionName *string `json:"collection_name,omitempty"`
+		CollectionSym  *string `json:"collection_symbol,omitempty"`
+		TokenID        string  `json:"token_id"`
+		Name           *string `json:"name,omitempty"`
+		Image          *string `json:"image,omitempty"`
 	}
 
 	var items []OwnerTokenItem
-	for rows.Next() {
-		var i OwnerTokenItem
-		if err := rows.Scan(&i.Contract, &i.TokenID, &i.CollectionName, &i.CollectionSym, &i.MetadataName, &i.MetadataImage); err == nil {
-			items = append(items, i)
-		} else {
-			a.Logger.Error("failed to scan owner token item", zap.Error(err))
+
+	if withMetadata {
+		query := `
+			SELECT ot.contract, ot.token_id, c.name, c.symbol, m.name, m.image
+			FROM owner_tokens ot
+			JOIN collections c ON c.address = ot.contract
+			LEFT JOIN metadata m ON m.contract = ot.contract AND m.token_id = ot.token_id
+			WHERE ot.owner = $1
+			ORDER BY ot.contract ASC, CAST(ot.token_id AS NUMERIC) ASC
+			LIMIT $2 OFFSET $3
+		`
+		rows, err := a.Store.Pool.Query(r.Context(), query, addressStr, limit, offset)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query owner tokens")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var i OwnerTokenItem
+			if err := rows.Scan(&i.Contract, &i.TokenID, &i.CollectionName, &i.CollectionSym, &i.Name, &i.Image); err == nil {
+				items = append(items, i)
+			} else {
+				a.Logger.Error("failed to scan owner token item", zap.Error(err))
+			}
+		}
+	} else {
+		query := `
+			SELECT ot.contract, ot.token_id, c.name, c.symbol
+			FROM owner_tokens ot
+			JOIN collections c ON c.address = ot.contract
+			WHERE ot.owner = $1
+			ORDER BY ot.contract ASC, CAST(ot.token_id AS NUMERIC) ASC
+			LIMIT $2 OFFSET $3
+		`
+		rows, err := a.Store.Pool.Query(r.Context(), query, addressStr, limit, offset)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query owner tokens")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var i OwnerTokenItem
+			if err := rows.Scan(&i.Contract, &i.TokenID, &i.CollectionName, &i.CollectionSym); err == nil {
+				items = append(items, i)
+			}
 		}
 	}
 

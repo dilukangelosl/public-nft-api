@@ -63,7 +63,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    serverAddr,
-		Handler: api.NewServer(db, listener, c, logger, mdMutex, mdQueue),
+		Handler: api.NewServer(db, listener, c, logger, mdMutex, mdQueue, cfg.ChainName),
 	}
 
 	go func() {
