@@ -62,14 +62,18 @@ func NewServer(
 		r.Post("/collections/{contract}/reindex-metadata", api.HandleReindexMetadata)
 		r.Post("/collections/{contract}/tokens/{tokenId}/reindex-metadata", api.HandleReindexSingleToken)
 
+		// Stats routes (uncached – always fresh)
+		r.Get("/stats", api.HandleGlobalStats)
+		r.Get("/collections/{contract}/stats", api.HandleCollectionStats)
+
 		// Cached Data Retrieval GET endpoints
 		r.Group(func(cr chi.Router) {
 			cr.Use(CacheMiddleware(cacheSvc, 30*time.Second)) // cache GET lists for 30s
-			
+
 			cr.Get("/collections/{contract}", api.HandleGetCollection)
 			cr.Get("/collections/{contract}/tokens", api.HandleListTokens)
 			cr.Get("/collections/{contract}/tokens/{tokenId}", api.HandleGetToken)
-			
+
 			cr.Get("/collections/{contract}/owners", api.HandleGetCollectionOwners)
 			cr.Get("/owners/{address}", api.HandleGetOwnerTokens)
 			cr.Get("/owners/{address}/collections/{contract}", api.HandleGetOwnerCollectionTokens)
