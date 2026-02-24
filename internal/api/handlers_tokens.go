@@ -45,7 +45,7 @@ func (a *API) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 			FROM tokens t
 			LEFT JOIN metadata m ON t.contract = m.contract AND t.token_id = m.token_id
 			WHERE t.contract = $1 ` + burnFilter + `
-			ORDER BY CAST(t.token_id AS NUMERIC) ASC
+			ORDER BY CASE WHEN t.token_id ~ '^[0-9]+$' THEN t.token_id::NUMERIC ELSE NULL END ASC, t.token_id ASC
 			LIMIT $2 OFFSET $3
 		`
 		rows, err := a.Store.Pool.Query(r.Context(), query, contract, limit, offset)
@@ -67,7 +67,7 @@ func (a *API) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 			SELECT token_id, owner
 			FROM tokens
 			WHERE contract = $1 ` + burnFilter + `
-			ORDER BY CAST(token_id AS NUMERIC) ASC
+			ORDER BY CASE WHEN token_id ~ '^[0-9]+$' THEN token_id::NUMERIC ELSE NULL END ASC, token_id ASC
 			LIMIT $2 OFFSET $3
 		`
 		rows, err := a.Store.Pool.Query(r.Context(), query, contract, limit, offset)

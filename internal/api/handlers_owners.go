@@ -104,7 +104,7 @@ func (a *API) HandleGetOwnerTokens(w http.ResponseWriter, r *http.Request) {
 			JOIN collections c ON c.address = ot.contract
 			LEFT JOIN metadata m ON m.contract = ot.contract AND m.token_id = ot.token_id
 			WHERE ot.owner = $1
-			ORDER BY ot.contract ASC, CAST(ot.token_id AS NUMERIC) ASC
+			ORDER BY ot.contract ASC, CASE WHEN ot.token_id ~ '^[0-9]+$' THEN ot.token_id::NUMERIC ELSE NULL END ASC, ot.token_id ASC
 			LIMIT $2 OFFSET $3
 		`
 		rows, err := a.Store.Pool.Query(r.Context(), query, addressStr, limit, offset)
@@ -127,7 +127,7 @@ func (a *API) HandleGetOwnerTokens(w http.ResponseWriter, r *http.Request) {
 			FROM owner_tokens ot
 			JOIN collections c ON c.address = ot.contract
 			WHERE ot.owner = $1
-			ORDER BY ot.contract ASC, CAST(ot.token_id AS NUMERIC) ASC
+			ORDER BY ot.contract ASC, CASE WHEN ot.token_id ~ '^[0-9]+$' THEN ot.token_id::NUMERIC ELSE NULL END ASC, ot.token_id ASC
 			LIMIT $2 OFFSET $3
 		`
 		rows, err := a.Store.Pool.Query(r.Context(), query, addressStr, limit, offset)
@@ -139,6 +139,89 @@ func (a *API) HandleGetOwnerTokens(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var i OwnerTokenItem
 			if err := rows.Scan(&i.Contract, &i.TokenID, &i.CollectionName, &i.CollectionSym); err == nil {
+				items = append(items, i)
+			}
+		}
+	}
+
+	RespondJSON(w, http.StatusOK, APIResponse{
+		Data: items,
+		Pagination: &Pagination{
+			Page:    page,
+			Limit:   limit,
+			Total:   total,
+			HasNext: (offset + limit) < total,
+		},
+	})
+}
+
+// GET /v1/owners/:address/collections/:contract
+// Returns all tokens owned by :address within :contract.
+func (a *API) HandleGetOwnerCollectionTokens(w http.ResponseWriter, r *http.Request) {
+	address := strings.ToLower(chi.URLParam(r, "address"))
+	contract := chi.URLParam(r, "contract")
+	page, limit := GetPagination(r)
+	offset := (page - 1) * limit
+	withMetadata := r.URL.Query().Get("metadata") == "true"
+
+	var total int
+	if err := a.Store.Pool.QueryRow(r.Context(),
+		`SELECT count(*) FROM owner_tokens WHERE owner = $1 AND contract = $2`,
+		address, contract,
+	).Scan(&total); err != nil {
+		RespondError(w, http.StatusInternalServerError, "db_error", "Failed to count tokens")
+		return
+	}
+
+	type Item struct {
+		TokenID     string      `json:"token_id"`
+		Owner       string      `json:"owner"`
+		Name        *string     `json:"name,omitempty"`
+		Description *string     `json:"description,omitempty"`
+		Image       *string     `json:"image,omitempty"`
+		Attributes  interface{} `json:"attributes,omitempty"`
+	}
+
+	var items []Item
+
+	if withMetadata {
+		rows, err := a.Store.Pool.Query(r.Context(), `
+			SELECT t.token_id, t.owner, m.name, m.description, m.image, m.attributes
+			FROM tokens t
+			LEFT JOIN metadata m ON m.contract = t.contract AND m.token_id = t.token_id
+			WHERE t.contract = $1 AND t.owner = $2
+			ORDER BY CASE WHEN t.token_id ~ '^[0-9]+$' THEN t.token_id::NUMERIC ELSE NULL END ASC, t.token_id ASC
+			LIMIT $3 OFFSET $4
+		`, contract, address, limit, offset)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query tokens")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var i Item
+			if err := rows.Scan(&i.TokenID, &i.Owner, &i.Name, &i.Description, &i.Image, &i.Attributes); err == nil {
+				items = append(items, i)
+			} else {
+				a.Logger.Error("failed to scan owner collection token", zap.Error(err))
+			}
+		}
+	} else {
+		rows, err := a.Store.Pool.Query(r.Context(), `
+			SELECT token_id, owner
+			FROM tokens
+			WHERE contract = $1 AND owner = $2
+			ORDER BY CASE WHEN token_id ~ '^[0-9]+$' THEN token_id::NUMERIC ELSE NULL END ASC, token_id ASC
+			LIMIT $3 OFFSET $4
+		`, contract, address, limit, offset)
+		if err != nil {
+			RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query tokens")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var i Item
+			if err := rows.Scan(&i.TokenID, &i.Owner); err == nil {
 				items = append(items, i)
 			}
 		}

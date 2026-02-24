@@ -72,6 +72,7 @@ func NewServer(
 			
 			cr.Get("/collections/{contract}/owners", api.HandleGetCollectionOwners)
 			cr.Get("/owners/{address}", api.HandleGetOwnerTokens)
+			cr.Get("/owners/{address}/collections/{contract}", api.HandleGetOwnerCollectionTokens)
 		})
 	})
 
