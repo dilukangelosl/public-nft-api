@@ -67,6 +67,7 @@ func NewServer(
 
 		// Stats routes (uncached – always fresh)
 		r.Get("/stats", api.HandleGlobalStats)
+		r.Get("/queue", api.HandleQueueStatus)
 		r.Get("/collections/{contract}/stats", api.HandleCollectionStats)
 
 		// Cached Data Retrieval GET endpoints
@@ -85,6 +86,7 @@ func NewServer(
 
 	// Setup basic Developer API landing page mapping
 	r.Get("/", LandingPageHandler(api.ChainName))
+	r.Get("/manager", ManagerPageHandler(api.ChainName))
 
 	return r
 }
@@ -92,10 +94,21 @@ func NewServer(
 //go:embed static/index.html
 var indexHTML []byte
 
+//go:embed static/manager.html
+var managerHTML []byte
+
 func LandingPageHandler(chainName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		page := bytes.ReplaceAll(indexHTML, []byte("{{CHAIN_NAME}}"), []byte(chainName))
+		w.Write(page)
+	}
+}
+
+func ManagerPageHandler(chainName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		page := bytes.ReplaceAll(managerHTML, []byte("{{CHAIN_NAME}}"), []byte(chainName))
 		w.Write(page)
 	}
 }

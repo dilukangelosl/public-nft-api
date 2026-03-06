@@ -289,3 +289,18 @@ func (l *Listener) enqueue(contract string, force bool) bool {
 	}
 	return true
 }
+
+func (l *Listener) DiscoveryQueueLen() int {
+	return len(l.discoveryChan)
+}
+
+func (l *Listener) GetPendingContracts() []string {
+	var out []string
+	l.pendingContracts.Range(func(key, value interface{}) bool {
+		if s, ok := key.(string); ok {
+			out = append(out, s)
+		}
+		return true
+	})
+	return out
+}

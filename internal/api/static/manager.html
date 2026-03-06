@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue Manager | {{CHAIN_NAME}} NFT API</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+        rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #050505;
+            color: #f1f1f1;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+            border-radius: 12px;
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #4ade80 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .progress-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: #18181b;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #4ade80);
+            transition: width 0.5s ease;
+        }
+    </style>
+</head>
+
+<body class="antialiased min-h-screen p-6 md:p-12">
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-12 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div>
+                <h1 class="text-4xl font-extrabold tracking-tight mb-2"><span class="gradient-text">Queue Manager</span>
+                </h1>
+                <p class="text-neutral-400">Real-time indexing status and queue management for {{CHAIN_NAME}}</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="retryAllFailed()"
+                    class="px-5 py-2.5 bg-yellow-600/20 text-yellow-400 border border-yellow-600/30 rounded-lg hover:bg-yellow-600/30 transition font-medium text-sm">
+                    Retry All Failed
+                </button>
+                <button onclick="refreshData()"
+                    class="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium text-sm">
+                    Refresh Page
+                </button>
+            </div>
+        </header>
+
+        <div class="grid lg:grid-cols-3 gap-8 mb-12">
+            <!-- Discovery Queue -->
+            <div class="glass-panel p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-bold text-white">Discovery Queue</h3>
+                    <span id="discovery-count"
+                        class="bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full text-xs font-bold">0</span>
+                </div>
+                <div id="discovery-list" class="space-y-3 min-h-[100px]">
+                    <!-- Items injected here -->
+                    <p class="text-neutral-500 text-sm italic">No contracts currently being indexed...</p>
+                </div>
+            </div>
+
+            <!-- Metadata Queues -->
+            <div class="glass-panel p-6 lg:col-span-2">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-bold text-white">Active Metadata Channels</h3>
+                    <span id="metadata-count"
+                        class="bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold">0</span>
+                </div>
+                <div id="metadata-list" class="grid sm:grid-cols-2 gap-4">
+                    <!-- Items injected here -->
+                </div>
+            </div>
+        </div>
+
+        <h2 class="text-2xl font-bold mb-6 text-white">Indexed Collections</h2>
+        <div id="collections-list" class="grid md:grid-cols-2 gap-6">
+            <!-- Cards injected here -->
+        </div>
+    </div>
+
+    <script>
+        async function refreshData() {
+            try {
+                const [queueRes, statsRes] = await Promise.all([
+                    fetch('/v1/queue'),
+                    fetch('/v1/stats')
+                ]);
+
+                const queue = (await queueRes.json()).data;
+                const stats = (await statsRes.json()).data;
+
+                updateQueueView(queue);
+                updateStatsView(stats);
+            } catch (err) {
+                console.error('Failed to fetch data:', err);
+            }
+        }
+
+        function updateQueueView(queue) {
+            // Discovery
+            const discList = document.getElementById('discovery-list');
+            const discCount = document.getElementById('discovery-count');
+            discCount.textContent = queue.discovery_queue_size;
+
+            if (queue.pending_discovery && queue.pending_discovery.length > 0) {
+                discList.innerHTML = queue.pending_discovery.map(addr => `
+                    <div class="flex items-center justify-between bg-neutral-900/50 p-3 rounded-lg border border-neutral-800">
+                        <code class="text-xs text-blue-400">${addr.substring(0, 10)}...${addr.substring(38)}</code>
+                        <span class="text-[10px] uppercase font-bold text-neutral-500">Processing</span>
+                    </div>
+                `).join('');
+            } else {
+                discList.innerHTML = '<p class="text-neutral-500 text-sm italic">No contracts currently being indexed...</p>';
+            }
+
+            // Metadata
+            const metaList = document.getElementById('metadata-list');
+            const metaCountDisplay = document.getElementById('metadata-count');
+            const metaEntries = Object.entries(queue.metadata_queues || {});
+            metaCountDisplay.textContent = metaEntries.length;
+
+            if (metaEntries.length > 0) {
+                metaList.innerHTML = metaEntries.map(([addr, len]) => `
+                    <div class="bg-neutral-900/50 p-4 rounded-lg border border-neutral-800 flex justify-between items-center">
+                        <div>
+                            <code class="text-xs text-neutral-400 block mb-1">${addr.substring(0, 8)}...</code>
+                            <span class="text-lg font-bold text-emerald-400">${len.toLocaleString()}</span>
+                            <span class="text-xs text-neutral-500 ml-1">pending tokens</span>
+                        </div>
+                        <button onclick="resyncCollection('${addr}')" class="text-neutral-500 hover:text-white transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
+                        </button>
+                    </div>
+                `).join('');
+            } else {
+                metaList.innerHTML = '<p class="text-neutral-500 text-sm italic col-span-2 text-center py-6">All metadata channels are idle.</p>';
+            }
+        }
+
+        function updateStatsView(stats) {
+            const list = document.getElementById('collections-list');
+            list.innerHTML = stats.map(s => `
+                <div class="glass-panel p-6 flex flex-col justify-between">
+                    <div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h4 class="text-xl font-bold text-white">${s.name || 'Unnamed'}</h4>
+                                <code class="text-xs text-neutral-500">${s.address}</code>
+                            </div>
+                            <span class="px-2 py-1 rounded text-[10px] font-bold uppercase ${s.snapshot_done ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'}">
+                                ${s.snapshot_done ? 'Snapshot Done' : 'Indexing...'}
+                            </span>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4 mb-6">
+                            <div class="bg-neutral-900/40 p-3 rounded-lg">
+                                <span class="text-[10px] uppercase text-neutral-500 block mb-1">Total Supply</span>
+                                <span class="text-lg font-bold">${s.total_supply.toLocaleString()}</span>
+                            </div>
+                            <div class="bg-neutral-900/40 p-3 rounded-lg">
+                                <span class="text-[10px] uppercase text-neutral-500 block mb-1">Metadata</span>
+                                <span class="text-lg font-bold">${s.metadata_fetched.toLocaleString()}</span>
+                                <span class="text-xs text-neutral-600">/ ${s.tokens_indexed.toLocaleString()}</span>
+                            </div>
+                        </div>
+
+                        <div class="mb-6">
+                            <div class="flex justify-between text-[11px] mb-2 font-medium">
+                                <span class="text-neutral-400">Metadata Progress</span>
+                                <span class="text-emerald-400">${s.metadata_progress_pct}%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${s.metadata_progress_pct}%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2 mt-2">
+                        <button onclick="reindexCollection('${s.address}')" class="flex-1 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded text-xs font-bold transition">
+                            Catch-up Metadata
+                        </button>
+                        <button onclick="resyncCollection('${s.address}')" class="flex-1 py-2 bg-white/5 hover:bg-white/10 text-neutral-400 rounded text-xs font-bold transition">
+                            Full Resync
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function reindexCollection(addr) {
+            if (!confirm(`Re-queue pending metadata for ${addr}?`)) return;
+            const res = await fetch(`/v1/collections/${addr}/reindex-metadata`, { method: 'POST' });
+            if (res.ok) { alert('Catch-up queued!'); refreshData(); }
+        }
+
+        async function resyncCollection(addr) {
+            const deleteStale = confirm(`Full Resync for ${addr}? This will re-fetch all tokens. Click OK to just re-fetch, or CANCEL to clear existing metadata first (not implemented in this prompt, just re-fetching).`);
+            const res = await fetch(`/v1/collections/${addr}/resync-metadata`, { method: 'POST' });
+            if (res.ok) { alert('Full resync queued!'); refreshData(); }
+        }
+
+        async function retryAllFailed() {
+            if (!confirm('Retry all failed metadata across all collections?')) return;
+            const res = await fetch('/v1/metadata/retry-failed', { method: 'POST' });
+            if (res.ok) { alert('Global retry queued!'); refreshData(); }
+        }
+
+        // Auto-refresh every 10 seconds
+        setInterval(refreshData, 10000);
+        refreshData();
+    </script>
+</body>
+
+</html>

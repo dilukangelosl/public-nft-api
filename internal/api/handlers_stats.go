@@ -170,3 +170,28 @@ func (a *API) HandleGlobalStats(w http.ResponseWriter, r *http.Request) {
 
 	RespondJSON(w, http.StatusOK, APIResponse{Data: items})
 }
+type QueueStatus struct {
+	DiscoveryQueueSize int            `json:"discovery_queue_size"`
+	PendingDiscovery   []string       `json:"pending_discovery"`
+	MetadataQueues     map[string]int `json:"metadata_queues"`
+}
+
+// GET /v1/queue
+// Returns the current state of discovery and metadata queues.
+func (a *API) HandleQueueStatus(w http.ResponseWriter, r *http.Request) {
+	status := QueueStatus{
+		DiscoveryQueueSize: a.Listener.DiscoveryQueueLen(),
+		PendingDiscovery:   a.Listener.GetPendingContracts(),
+		MetadataQueues:     make(map[string]int),
+	}
+
+	a.MetadataMutex.RLock()
+	for contract, ch := range a.MetadataQueue {
+		if len(ch) > 0 {
+			status.MetadataQueues[contract] = len(ch)
+		}
+	}
+	a.MetadataMutex.RUnlock()
+
+	RespondJSON(w, http.StatusOK, APIResponse{Data: status})
+}
