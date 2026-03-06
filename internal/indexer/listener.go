@@ -102,6 +102,11 @@ func (l *Listener) runManualDiscoveryListener(ctx context.Context) {
 			contract := notification.Payload
 			if _, known := l.knownContracts.Load(contract); !known {
 				if _, pending := l.pendingContracts.LoadOrStore(contract, true); !pending {
+					// Persist as pending in DB so manager can see it immediately
+					_ = l.dbStore.CreateCollection(ctx, store.Collection{
+						Address:      contract,
+						SnapshotDone: false,
+					})
 					l.discoveryChan <- contract
 					l.logger.Info("Received Postgres NOTIFY for manual indexing", zap.String("contract", contract))
 				}
@@ -192,6 +197,13 @@ func (l *Listener) handleTransferLog(ctx context.Context, contract, from, to, to
 	// 4. New contract — push to discovery.
 	if _, alreadyPending := l.pendingContracts.LoadOrStore(contract, true); !alreadyPending {
 		l.logger.Info("New unindexed contract detected, pushing to discovery", zap.String("contract", contract))
+
+		// Persist as pending in DB so manager can see it immediately
+		_ = l.dbStore.CreateCollection(ctx, store.Collection{
+			Address:      contract,
+			SnapshotDone: false,
+		})
+
 		select {
 		case l.discoveryChan <- contract:
 		default:

@@ -73,13 +73,13 @@
             <!-- Discovery Queue -->
             <div class="glass-panel p-6">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-lg font-bold text-white">Discovery Queue</h3>
+                    <h3 class="text-lg font-bold text-white">Snapshots in Progress</h3>
                     <span id="discovery-count"
                         class="bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full text-xs font-bold">0</span>
                 </div>
                 <div id="discovery-list" class="space-y-3 min-h-[100px]">
                     <!-- Items injected here -->
-                    <p class="text-neutral-500 text-sm italic">No contracts currently being indexed...</p>
+                    <p class="text-neutral-500 text-sm italic">No active snapshots...</p>
                 </div>
             </div>
 
@@ -130,11 +130,11 @@
                 discList.innerHTML = queue.pending_discovery.map(addr => `
                     <div class="flex items-center justify-between bg-neutral-900/50 p-3 rounded-lg border border-neutral-800">
                         <code class="text-xs text-blue-400">${addr.substring(0, 10)}...${addr.substring(38)}</code>
-                        <span class="text-[10px] uppercase font-bold text-neutral-500">Processing</span>
+                        <span class="text-[10px] uppercase font-bold text-blue-500/60 animate-pulse">Snapshotting</span>
                     </div>
                 `).join('');
             } else {
-                discList.innerHTML = '<p class="text-neutral-500 text-sm italic">No contracts currently being indexed...</p>';
+                discList.innerHTML = '<p class="text-neutral-500 text-sm italic">No active snapshots...</p>';
             }
 
             // Metadata

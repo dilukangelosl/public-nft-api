@@ -177,21 +177,48 @@ type QueueStatus struct {
 }
 
 // GET /v1/queue
-// Returns the current state of discovery and metadata queues.
+// Returns the current state of discovery and metadata queues by querying the database.
 func (a *API) HandleQueueStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	status := QueueStatus{
-		DiscoveryQueueSize: a.Listener.DiscoveryQueueLen(),
-		PendingDiscovery:   a.Listener.GetPendingContracts(),
-		MetadataQueues:     make(map[string]int),
+		MetadataQueues:   make(map[string]int),
+		PendingDiscovery: []string{},
 	}
 
-	a.MetadataMutex.RLock()
-	for contract, ch := range a.MetadataQueue {
-		if len(ch) > 0 {
-			status.MetadataQueues[contract] = len(ch)
+	// 1. Get collections currently snapshotting or reindexing
+	rows, err := a.Store.Pool.Query(ctx, `
+		SELECT address FROM collections 
+		WHERE snapshot_done = false OR reindexing = true
+	`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var addr string
+			if err := rows.Scan(&addr); err == nil {
+				status.PendingDiscovery = append(status.PendingDiscovery, addr)
+			}
+		}
+		status.DiscoveryQueueSize = len(status.PendingDiscovery)
+	}
+
+	// 2. Get metadata pending tokens count per contract
+	// We only show collections that have > 0 pending to avoid clutter
+	metaRows, err := a.Store.Pool.Query(ctx, `
+		SELECT contract, COUNT(*) 
+		FROM tokens 
+		WHERE metadata_fetched = false 
+		GROUP BY contract
+	`)
+	if err == nil {
+		defer metaRows.Close()
+		for metaRows.Next() {
+			var contract string
+			var count int
+			if err := metaRows.Scan(&contract, &count); err == nil {
+				status.MetadataQueues[contract] = count
+			}
 		}
 	}
-	a.MetadataMutex.RUnlock()
 
 	RespondJSON(w, http.StatusOK, APIResponse{Data: status})
 }

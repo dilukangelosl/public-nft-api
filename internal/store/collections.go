@@ -24,12 +24,17 @@ func (s *Store) CreateCollection(ctx context.Context, coll Collection) error {
 	query := `
 		INSERT INTO collections (address, name, symbol, total_supply, start_index, snapshot_block)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (address) DO NOTHING
+		ON CONFLICT (address) DO UPDATE SET
+			name = EXCLUDED.name,
+			symbol = EXCLUDED.symbol,
+			total_supply = EXCLUDED.total_supply,
+			start_index = EXCLUDED.start_index,
+			snapshot_block = EXCLUDED.snapshot_block
 	`
 	_, err := s.Pool.Exec(ctx, query,
 		coll.Address, coll.Name, coll.Symbol, coll.TotalSupply, coll.StartIndex, coll.SnapshotBlock)
 	if err != nil {
-		return fmt.Errorf("error creating collection %s: %w", coll.Address, err)
+		return fmt.Errorf("error creating/updating collection %s: %w", coll.Address, err)
 	}
 	return nil
 }
