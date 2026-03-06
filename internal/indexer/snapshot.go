@@ -170,7 +170,7 @@ func ProcessSnapshot(
 							select {
 							case metadataQueue[contract] <- tokenIDStr:
 							default:
-								logger.Warn("Metadata queue full, dropping immediate enqueue", zap.String("tokenId", tokenIDStr))
+								logger.Debug("Metadata queue full, dropping immediate enqueue", zap.String("tokenId", tokenIDStr))
 							}
 						}
 					}

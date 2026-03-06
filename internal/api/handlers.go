@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (a *API) triggerFullReindex(ctx context.Context, contract string, totalSupp
 			case ch <- tokenID:
 			default:
 				// Channel full — dispatcher will drain before we can push more
-				a.Logger.Warn("Metadata queue full during reindex", zap.String("contract", contract), zap.String("token", tokenID))
+				a.Logger.Debug("Metadata queue full during reindex", zap.String("contract", contract), zap.String("token", tokenID))
 			}
 		}
 	}
@@ -227,5 +228,44 @@ func (a *API) enqueueSingleTokenMetadata(w http.ResponseWriter, r *http.Request,
 
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"message": "Token queued for metadata fetch."}`))
+}
+
+// POST /v1/metadata/retry-failed
+// Global endpoint to fetch all failed metadata and queue them for refetching.
+func (a *API) HandleRetryFailedMetadata(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+
+	// Find all tokens that haven't had their metadata fetched (or failed previously)
+	query := `SELECT contract, token_id FROM tokens WHERE metadata_fetched = false`
+	rows, err := a.Store.Pool.Query(ctx, query)
+	if err != nil {
+		a.Logger.Error("Failed to query failed/pending metadata", zap.Error(err))
+		RespondError(w, http.StatusInternalServerError, "db_error", "Failed to query pending metadata")
+		return
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var contract, tokenID string
+		if err := rows.Scan(&contract, &tokenID); err == nil {
+			count++
+			a.MetadataMutex.Lock()
+			if _, ok := a.MetadataQueue[contract]; !ok {
+				a.MetadataQueue[contract] = make(chan string, 10000)
+			}
+			ch := a.MetadataQueue[contract]
+			a.MetadataMutex.Unlock()
+
+			select {
+			case ch <- tokenID:
+			default:
+				a.Logger.Debug("Metadata queue full during retry-failed", zap.String("contract", contract), zap.String("token", tokenID))
+			}
+		}
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte(fmt.Sprintf(`{"message": "Queued %d failed or pending tokens across all collections for metadata fetch."}`, count)))
 }
 

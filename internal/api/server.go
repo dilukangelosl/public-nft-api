@@ -59,6 +59,7 @@ func NewServer(
 		
 		// Command/Enqueuing POST endpoints
 		r.Post("/collections", api.HandleQueueCollection)
+		r.Post("/metadata/retry-failed", api.HandleRetryFailedMetadata)
 		r.Post("/collections/{contract}/reindex-metadata", api.HandleReindexMetadata)
 		r.Post("/collections/{contract}/resync-metadata", api.HandleResyncMetadata)
 		r.Post("/collections/{contract}/tokens/{tokenId}/reindex-metadata", api.HandleReindexSingleToken)
